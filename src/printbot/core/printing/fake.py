@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from printbot.core.models import DuplexMode, ErrorCode
+from printbot.core.models import DuplexMode, ErrorCode, PaperSize
 from printbot.core.printing.base import (
     PrinterInfo,
     PrintError,
@@ -27,6 +27,7 @@ class FakePrinterBackend:
 
     output_dir: Path
     printers: dict[str, bool] = field(default_factory=dict)  # system_name -> supports_duplex
+    a3_printers: set[str] = field(default_factory=set)  # кто умеет A3
     fail_with: ErrorCode | None = None
     unavailable: dict[str, ErrorCode] = field(default_factory=dict)
     calls: list[PrintCall] = field(default_factory=list)
@@ -38,7 +39,9 @@ class FakePrinterBackend:
 
     async def list_printers(self) -> list[PrinterInfo]:
         return [
-            PrinterInfo(system_name=name, supports_duplex=dup)
+            PrinterInfo(
+                system_name=name, supports_duplex=dup, supports_a3=name in self.a3_printers
+            )
             for name, dup in self.printers.items()
         ]
 
@@ -62,6 +65,8 @@ class FakePrinterBackend:
             raise PrintError(ErrorCode.INTERNAL, "дуплекс запрошен у принтера без дуплекса")
         if not options.copies >= 1:
             raise PrintError(ErrorCode.INTERNAL, f"некорректное число копий: {options.copies}")
+        if options.paper is PaperSize.A3 and options.system_name not in self.a3_printers:
+            raise PrintError(ErrorCode.INTERNAL, "A3 запрошен у принтера без поддержки A3")
         if self.fail_with is not None:
             raise PrintError(self.fail_with, "сценарий теста")
 

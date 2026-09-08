@@ -21,7 +21,7 @@ from printbot.core.documents import (
     validate_size,
     validate_source,
 )
-from printbot.core.models import DocumentFormat, DuplexMode, PrinterView
+from printbot.core.models import DocumentFormat, DuplexMode, PaperSize, PrinterView
 from printbot.services import Services
 from printbot.util.files import remove_tree
 
@@ -156,7 +156,7 @@ async def _ask_printer(reply: Any, state: FSMContext, services: Services) -> Non
         return
     if len(views) == 1:
         await _remember_printer(state, views[0])
-        await _ask_duplex(reply, state, services)
+        await _ask_paper(reply, state, services)
         return
     await state.set_state(PrintFlow.choosing_printer)
     await reply.answer(texts.ASK_PRINTER, reply_markup=kb.printers_keyboard(views))
@@ -168,6 +168,8 @@ async def _remember_printer(state: FSMContext, view: PrinterView) -> None:
         printer_system=view.system_name,
         printer_display=view.display_name,
         supports_duplex=view.supports_duplex,
+        supports_a3=view.supports_a3,
+        paper=PaperSize.A4.value,
     )
 
 
@@ -194,11 +196,44 @@ async def on_printer_chosen(callback: Any, state: FSMContext, services: Services
         return
 
     await _remember_printer(state, view)
+    await _ask_paper(callback.message, state, services)
+    await callback.answer()
+
+
+# --- шаг 3: формат бумаги (только для принтеров с A3) --------------------------
+
+
+async def _ask_paper(reply: Any, state: FSMContext, services: Services) -> None:
+    """У принтеров без A3 шага нет — лишний вопрос там только мешает."""
+    data = await state.get_data()
+    if not data.get("supports_a3"):
+        await state.update_data(paper=PaperSize.A4.value)
+        await _ask_duplex(reply, state, services)
+        return
+    await state.set_state(PrintFlow.choosing_paper)
+    await reply.answer(texts.ASK_PAPER, reply_markup=kb.paper_keyboard())
+
+
+@router.callback_query(F.data.startswith(f"{kb.CB_PAPER}:"))
+async def on_paper_chosen(callback: Any, state: FSMContext, services: Services) -> None:
+    data = await _load_draft(state, services, callback.message)
+    if data is None:
+        await callback.answer()
+        return
+
+    value = callback.data.split(":", 1)[1]
+    paper = PaperSize.A3 if value == PaperSize.A3.value else PaperSize.A4
+    if paper is PaperSize.A3 and not data.get("supports_a3"):
+        await callback.message.answer(texts.PAPER_UNAVAILABLE)
+        await callback.answer()
+        return
+
+    await state.update_data(paper=paper.value)
     await _ask_duplex(callback.message, state, services)
     await callback.answer()
 
 
-# --- шаг 3: стороны ------------------------------------------------------------
+# --- шаг 4: стороны ------------------------------------------------------------
 
 
 async def _ask_duplex(reply: Any, state: FSMContext, services: Services) -> None:
@@ -233,7 +268,7 @@ async def on_duplex_chosen(callback: Any, state: FSMContext, services: Services)
     await callback.answer()
 
 
-# --- шаг 4: копии --------------------------------------------------------------
+# --- шаг 5: копии --------------------------------------------------------------
 
 
 async def _set_copies(reply: Any, state: FSMContext, services: Services, raw: str) -> None:
@@ -255,9 +290,11 @@ async def _set_copies(reply: Any, state: FSMContext, services: Services, raw: st
 
 def _summary_text(data: dict) -> str:
     pages = data.get("page_count")
+    paper = PaperSize(data.get("paper", PaperSize.A4.value))
     return texts.CONFIRM_SUMMARY.format(
         file_name=data["file_name"],
         printer=data["printer_display"],
+        paper=texts.PAPER_TEXTS[paper],
         duplex=texts.DUPLEX_TEXTS[DuplexMode(data["duplex"])],
         copies=data["copies"],
         pages=f"\n• Страниц: {pages}" if pages else "",
@@ -282,7 +319,7 @@ async def on_copies_text(message: Any, state: FSMContext, services: Services) ->
     await _set_copies(message, state, services, message.text or "")
 
 
-# --- шаг 5: подтверждение и постановка в очередь -------------------------------
+# --- шаг 6: подтверждение и постановка в очередь -------------------------------
 
 
 @router.callback_query(F.data.startswith(f"{kb.CB_CONFIRM}:"))
@@ -358,6 +395,7 @@ async def _submit(
         printer_name=data["printer_system"],
         duplex_mode=DuplexMode(data["duplex"]),
         copies=data["copies"],
+        paper=PaperSize(data.get("paper", PaperSize.A4.value)),
         page_count=data.get("page_count"),
     )
     # Владение каталогом переходит к JobService — он удалит его после печати.

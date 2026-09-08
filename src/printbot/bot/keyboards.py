@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from printbot.core.models import PrinterView
 
 CB_PRINTER = "pr"
+CB_PAPER = "pp"
 CB_DUPLEX = "dx"
 CB_COPIES = "cp"
 CB_CONFIRM = "ok"
@@ -29,6 +30,19 @@ def printers_keyboard(views: list[PrinterView]) -> InlineKeyboardMarkup:
     ]
     rows.append(_row(InlineKeyboardButton(text="Отмена", callback_data=f"{CB_CONFIRM}:cancel")))
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def paper_keyboard() -> InlineKeyboardMarkup:
+    """Показывается только у принтеров, которые умеют A3."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            _row(
+                InlineKeyboardButton(text="A4", callback_data=f"{CB_PAPER}:A4"),
+                InlineKeyboardButton(text="A3", callback_data=f"{CB_PAPER}:A3"),
+            ),
+            _row(InlineKeyboardButton(text="Отмена", callback_data=f"{CB_CONFIRM}:cancel")),
+        ]
+    )
 
 
 def duplex_keyboard(supports_duplex: bool) -> InlineKeyboardMarkup:

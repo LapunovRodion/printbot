@@ -9,7 +9,7 @@ import aiosqlite
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _MIGRATION_1 = """
 CREATE TABLE IF NOT EXISTS users (
@@ -67,7 +67,12 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events (created_at DESC);
 """
 
-MIGRATIONS: tuple[str, ...] = (_MIGRATION_1,)
+#: Выбор формата бумаги (A4/A3) появился позже — старые базы дополняются колонкой.
+_MIGRATION_2 = """
+ALTER TABLE print_jobs ADD COLUMN paper TEXT NOT NULL DEFAULT 'A4';
+"""
+
+MIGRATIONS: tuple[str, ...] = (_MIGRATION_1, _MIGRATION_2)
 
 
 async def connect(db_path: Path) -> aiosqlite.Connection:

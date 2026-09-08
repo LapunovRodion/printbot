@@ -167,7 +167,10 @@ class JobService:
             await self._backend.print_pdf(
                 pdf,
                 PrintOptions(
-                    system_name=job.printer_name, duplex=job.duplex_mode, copies=job.copies
+                    system_name=job.printer_name,
+                    duplex=job.duplex_mode,
+                    copies=job.copies,
+                    paper=job.paper,
                 ),
                 self._print_timeout,
             )

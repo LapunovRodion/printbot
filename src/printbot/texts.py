@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from printbot.core.models import DuplexMode, ErrorCode, JobStatus, PrintJob
+from printbot.core.models import DuplexMode, ErrorCode, JobStatus, PaperSize, PrintJob
 
 SUPPORTED_FORMATS = "DOCX и PDF"
 
@@ -44,6 +44,8 @@ FILE_ENCRYPTED = "Файл защищён паролем. Снимите защ�
 FILE_ACCEPTED = "Принят файл «{file_name}»."
 
 ASK_PRINTER = "Выберите принтер:"
+ASK_PAPER = "На какой бумаге печатать?"
+PAPER_UNAVAILABLE = "Этот принтер печатает только на A4."
 ASK_DUPLEX = "Печать с одной стороны или с двух?"
 DUPLEX_UNAVAILABLE = (
     "У этого принтера нет двусторонней печати, поэтому доступна только односторонняя."
@@ -57,6 +59,7 @@ CONFIRM_SUMMARY = (
     "Проверьте задание:\n"
     "• Файл: {file_name}\n"
     "• Принтер: {printer}\n"
+    "• Бумага: {paper}\n"
     "• Печать: {duplex}\n"
     "• Копий: {copies}{pages}\n\n"
     "Печатаем?"
@@ -109,6 +112,11 @@ DUPLEX_TEXTS: dict[DuplexMode, str] = {
     DuplexMode.DUPLEX_LONG: "двусторонняя",
 }
 
+PAPER_TEXTS: dict[PaperSize, str] = {
+    PaperSize.A4: "A4",
+    PaperSize.A3: "A3",
+}
+
 INTERNAL_ERROR = (
     "Что-то пошло не так. Попробуйте ещё раз, а если повторится — сообщите администратору."
 )
@@ -123,7 +131,7 @@ def error_text(code: ErrorCode | None) -> str:
 def job_summary(job: PrintJob, printer_display: str) -> str:
     pages = f", страниц: {job.page_count}" if job.page_count else ""
     return (
-        f"«{job.file_name}» → {printer_display}, "
+        f"«{job.file_name}» → {printer_display}, {PAPER_TEXTS[job.paper]}, "
         f"{DUPLEX_TEXTS[job.duplex_mode]}, копий: {job.copies}{pages}"
     )
 
@@ -134,7 +142,8 @@ def job_line(job: PrintJob) -> str:
     tail = f" ({error_text(job.error_code)})" if job.error_code else ""
     return (
         f"№{job.id} · {when} · «{job.file_name}» · {job.printer_name} · "
-        f"{DUPLEX_TEXTS[job.duplex_mode]} · {job.copies} коп. · {status}{tail}"
+        f"{PAPER_TEXTS[job.paper]} · {DUPLEX_TEXTS[job.duplex_mode]} · "
+        f"{job.copies} коп. · {status}{tail}"
     )
 
 

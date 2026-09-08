@@ -8,6 +8,7 @@ system_name = "Pantum P5100"
 model = "Pantum 5100"
 enabled = true
 # supports_duplex = true   # необязательно: переопределяет автоопределение
+# supports_a3 = true       # необязательно: разрешить выбор бумаги A3
 
 [[printer]]
 key = "office"

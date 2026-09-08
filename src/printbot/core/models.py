@@ -23,6 +23,11 @@ class DocumentFormat(StrEnum):
     PDF = "PDF"
 
 
+class PaperSize(StrEnum):
+    A4 = "A4"
+    A3 = "A3"
+
+
 class DuplexMode(StrEnum):
     SIMPLEX = "SIMPLEX"
     DUPLEX_LONG = "DUPLEX_LONG"
@@ -118,6 +123,7 @@ class PrintJob:
     duplex_mode: DuplexMode
     copies: int
     status: JobStatus
+    paper: PaperSize = PaperSize.A4
     page_count: int | None = None
     error_code: ErrorCode | None = None
     error_detail: str | None = None
@@ -136,6 +142,7 @@ class PrinterConfig:
     model: str = ""
     enabled: bool = True
     supports_duplex: bool | None = None  # None = определять автоматически
+    supports_a3: bool | None = None  # None = определять автоматически
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +152,7 @@ class PrinterView:
     config: PrinterConfig
     available: bool
     supports_duplex: bool
+    supports_a3: bool = False
     reason: ErrorCode | None = None
 
     @property

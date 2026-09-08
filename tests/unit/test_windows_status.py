@@ -79,7 +79,28 @@ def test_toner_low_together_with_paper_out() -> None:
     assert win.classify_status(bits, 0) is ErrorCode.PAPER_OUT
 
 
-def test_duplex_constants_match_windows_headers() -> None:
-    """DC_DUPLEX=7 из wingdi.h; ошибка в этом числе молча выключает дуплекс."""
+def test_driver_query_constants_match_windows_headers() -> None:
+    """Ошибка в этих числах молча выключает дуплекс или A3, не давая никакой ошибки."""
     assert win.DC_DUPLEX == 7
+    assert win.DC_PAPERS == 2
     assert win.DM_DUPLEX == 0x1000
+    assert win.DMPAPER_A3 == 8
+    assert win.DMPAPER_A4 == 9
+
+
+def test_print_settings_include_paper_size() -> None:
+    """Формат бумаги должен доехать до SumatraPDF в строке -print-settings."""
+    from pathlib import Path as _Path
+
+    from printbot.core.models import DuplexMode, PaperSize
+    from printbot.core.printing.base import PrintOptions
+    from printbot.core.printing.windows import WindowsPrinterBackend
+
+    backend = WindowsPrinterBackend(sumatra_path=_Path("SumatraPDF.exe"))
+    command = backend.build_command(
+        _Path("doc.pdf"),
+        PrintOptions(
+            system_name="HP", duplex=DuplexMode.SIMPLEX, copies=2, paper=PaperSize.A3
+        ),
+    )
+    assert "paper=A3" in " ".join(command)

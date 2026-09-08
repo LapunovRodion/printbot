@@ -8,7 +8,7 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from printbot.core.models import DuplexMode, ErrorCode
+from printbot.core.models import DuplexMode, ErrorCode, PaperSize
 from printbot.core.printing.base import (
     PrinterInfo,
     PrintError,
@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 _DUPLEX_FLAG = {
     DuplexMode.SIMPLEX: "simplex",
     DuplexMode.DUPLEX_LONG: "duplexlong",
+}
+
+#: Формат бумаги в терминах ключа -print-settings у SumatraPDF.
+_PAPER_FLAG = {
+    PaperSize.A4: "A4",
+    PaperSize.A3: "A3",
 }
 
 #: Числовые значения из winspool.h. Берём их явно, а не через getattr у модуля:
@@ -40,8 +46,13 @@ PRINTER_STATUS_DOOR_OPEN = 0x00400000
 PRINTER_ATTRIBUTE_WORK_OFFLINE = 0x00000400
 
 #: Индексы DeviceCapabilities и поля DEVMODE (wingdi.h).
+DC_PAPERS = 2
 DC_DUPLEX = 7
 DM_DUPLEX = 0x1000
+
+#: Идентификаторы форматов бумаги из wingdi.h.
+DMPAPER_A3 = 8
+DMPAPER_A4 = 9
 
 #: Биты состояния, при которых печатать нельзя (contracts/printer-backend.md).
 #: Порядок важен: первая подошедшая причина показывается пользователю.
@@ -115,7 +126,11 @@ class WindowsPrinterBackend:
     # --- печать -----------------------------------------------------------------
 
     def build_command(self, pdf: Path, options: PrintOptions) -> list[str]:
-        settings = [_DUPLEX_FLAG[options.duplex], f"{options.copies}x", f"paper={options.paper}"]
+        settings = [
+            _DUPLEX_FLAG[options.duplex],
+            f"{options.copies}x",
+            f"paper={_PAPER_FLAG[options.paper]}",
+        ]
         if options.monochrome:
             settings.append("monochrome")
         return [
@@ -189,6 +204,7 @@ class WindowsPrinterBackend:
                     PrinterInfo(
                         system_name=name,
                         supports_duplex=self._supports_duplex_sync(name, port),
+                        supports_a3=self._supports_a3_sync(name, port),
                     )
                 )
         except Exception as exc:  # pragma: no cover - список принтеров не должен ронять бота
@@ -249,6 +265,23 @@ class WindowsPrinterBackend:
             if handle is not None:
                 with suppress(Exception):
                     win32print.ClosePrinter(handle)
+
+    async def supports_a3(self, system_name: str, port: str = "") -> bool:
+        return await asyncio.to_thread(self._supports_a3_sync, system_name, port)
+
+    def _supports_a3_sync(self, system_name: str, port: str = "") -> bool:
+        """Есть ли A3 среди форматов, которые заявляет драйвер (DC_PAPERS)."""
+        win32print = _win32print()
+        if win32print is None:
+            return False
+        try:
+            papers = win32print.DeviceCapabilities(system_name, port, DC_PAPERS)
+        except Exception as exc:  # pragma: no cover - драйвер может не отвечать
+            log.debug("Список форматов недоступен для %s: %s", system_name, exc)
+            return False
+        if not papers:
+            return False
+        return DMPAPER_A3 in {int(paper) for paper in papers}
 
     async def get_status(self, system_name: str) -> PrinterStatus:
         return await asyncio.to_thread(self._get_status_sync, system_name)

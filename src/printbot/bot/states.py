@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class PrintFlow(StatesGroup):
     choosing_printer = State()
+    choosing_paper = State()
     choosing_duplex = State()
     entering_copies = State()
     confirming = State()

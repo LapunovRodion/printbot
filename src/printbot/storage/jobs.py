@@ -13,6 +13,7 @@ from printbot.core.models import (
     DuplexMode,
     ErrorCode,
     JobStatus,
+    PaperSize,
     PrintJob,
     can_transition,
 )
@@ -44,6 +45,7 @@ def _row_to_job(row: aiosqlite.Row) -> PrintJob:
         printer_name=row["printer_name"],
         duplex_mode=DuplexMode(row["duplex_mode"]),
         copies=row["copies"],
+        paper=PaperSize(row["paper"]),
         status=JobStatus(row["status"]),
         error_code=ErrorCode(row["error_code"]) if row["error_code"] else None,
         error_detail=row["error_detail"],
@@ -72,12 +74,13 @@ class JobRepository:
         printer_name: str,
         duplex_mode: DuplexMode,
         copies: int,
+        paper: PaperSize = PaperSize.A4,
         page_count: int | None = None,
     ) -> PrintJob:
         cursor = await self._conn.execute(
             "INSERT INTO print_jobs (user_id, chat_id, file_name, source_format, file_size_bytes,"
-            " page_count, printer_name, duplex_mode, copies, status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " page_count, printer_name, duplex_mode, copies, paper, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 chat_id,
@@ -88,6 +91,7 @@ class JobRepository:
                 printer_name,
                 duplex_mode,
                 copies,
+                paper,
                 JobStatus.QUEUED,
                 _now(),
             ),

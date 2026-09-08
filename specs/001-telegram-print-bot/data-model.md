@@ -14,6 +14,7 @@
 | `Role` | `USER`, `ADMIN` | `users.role` |
 | `DocumentFormat` | `DOCX`, `PDF` | `print_jobs.source_format` |
 | `DuplexMode` | `SIMPLEX` (односторонняя), `DUPLEX_LONG` (двусторонняя, длинная кромка) | `print_jobs.duplex_mode` |
+| `PaperSize` | `A4`, `A3` | `print_jobs.paper` |
 | `JobStatus` | `DRAFT`, `QUEUED`, `CONVERTING`, `PRINTING`, `DONE`, `FAILED`, `CANCELLED` | `print_jobs.status` |
 | `ErrorCode` | `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`, `CORRUPT_FILE`, `ENCRYPTED_FILE`, `CONVERSION_FAILED`, `PRINTER_OFFLINE`, `PAPER_OUT`, `PAPER_JAM`, `NO_TONER`, `PRINTER_ERROR`, `TIMEOUT`, `INTERRUPTED`, `INTERNAL` | `print_jobs.error_code`, `PrintError` |
 | `AuditEventType` | `ACCESS_GRANTED`, `ACCESS_DENIED`, `ACCESS_REVOKED`, `CODE_CHANGED`, `LOCKOUT_STARTED`, `PRINTER_ADDED`, `PRINTER_REMOVED`, `JOURNAL_PURGED` | `audit_events.event_type` |
@@ -94,6 +95,7 @@ PENDING --(верный код)--> ALLOWED --(отзыв админом)--> REVO
 | `printer_name` | TEXT | NOT NULL | Системное имя целевого принтера |
 | `duplex_mode` | TEXT | NOT NULL, из `DuplexMode` | FR-006 |
 | `copies` | INTEGER | NOT NULL, 1 ≤ copies ≤ 50 | FR-007 |
+| `paper` | TEXT | NOT NULL, из `PaperSize`, DEFAULT `A4` | FR-006a (миграция 2) |
 | `status` | TEXT | NOT NULL, из `JobStatus` | FR-016, FR-019 |
 | `error_code` | TEXT | NULL, из `ErrorCode` | Заполнено ⟺ `status = FAILED` |
 | `error_detail` | TEXT | NULL | Техническая деталь для журнала, пользователю не показывается дословно |
@@ -105,7 +107,7 @@ PENDING --(верный код)--> ALLOWED --(отзыв админом)--> REVO
 
 **Правила валидации**
 - `copies` вне диапазона 1…50 отвергается на этапе диалога, в БД не попадает (FR-007).
-- `duplex_mode = DUPLEX_LONG` допустим только если у принтера `supports_duplex = true` (FR-008).
+- `duplex_mode = DUPLEX_LONG` допустим только если у принтера `supports_duplex = true` (FR-008); `paper = A3` — только если `supports_a3 = true` (FR-006a).
 - Финальные статусы: `DONE`, `FAILED`, `CANCELLED` — после них строка неизменяема (запись журнала).
 - Строки не удаляются автоматически: хранение бессрочное, очистка — только явным действием администратора с записью события `JOURNAL_PURGED` (FR-027).
 - Содержимое документа в БД не сохраняется — только метаданные (assumption из спеки).
@@ -154,6 +156,7 @@ QUEUED | CONVERTING | PRINTING ──рестарт процесса──> FAIL
 | `model` | конфиг | Справочно (Pantum 5100 / GM1033ADN) |
 | `enabled` | конфиг | Администратор может выключить принтер, не удаляя |
 | `supports_duplex` | автоопределение (`DeviceCapabilities`), переопределяется конфигом | FR-008 |
+| `supports_a3` | автоопределение (`DC_PAPERS`), переопределяется конфигом | FR-006a |
 | `available` | опрос статуса при показе списка | FR-015 |
 | `status_reason` | опрос статуса | Причина недоступности для сообщения пользователю |
 

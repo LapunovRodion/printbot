@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from printbot.core.models import DuplexMode, ErrorCode
+from printbot.core.models import DuplexMode, ErrorCode, PaperSize
 
 
 class PrintError(RuntimeError):
@@ -23,7 +23,7 @@ class PrintOptions:
     system_name: str
     duplex: DuplexMode
     copies: int
-    paper: str = "A4"
+    paper: PaperSize = PaperSize.A4
     monochrome: bool = True
 
 
@@ -31,6 +31,7 @@ class PrintOptions:
 class PrinterInfo:
     system_name: str
     supports_duplex: bool
+    supports_a3: bool = False
 
 
 @dataclass(frozen=True, slots=True)

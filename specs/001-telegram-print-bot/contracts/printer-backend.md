@@ -40,13 +40,14 @@ class PrintOptions:
     system_name: str          # точное имя принтера в системе
     duplex: DuplexMode        # SIMPLEX | DUPLEX_LONG
     copies: int               # 1..50, валидируется до вызова
-    paper: str = "A4"
+    paper: PaperSize = PaperSize.A4
     monochrome: bool = True
 
 @dataclass(frozen=True)
 class PrinterInfo:
     system_name: str
     supports_duplex: bool
+    supports_a3: bool
 
 @dataclass(frozen=True)
 class PrinterStatus:
@@ -57,13 +58,13 @@ class PrinterStatus:
 
 | Реализация | Модуль | Механика |
 |---|---|---|
-| `WindowsPrinterBackend` | `core/printing/windows.py` | Печать: `SumatraPDF.exe -print-to "<system_name>" -print-settings "<duplexlong\|simplex>,<N>x,paper=A4,monochrome" -silent -exit-when-done <pdf>`. Список и статус: `win32print.EnumPrinters`, `GetPrinter(handle, 2)`, `DeviceCapabilities(..., DC_DUPLEX)` |
+| `WindowsPrinterBackend` | `core/printing/windows.py` | Печать: `SumatraPDF.exe -print-to "<system_name>" -print-settings "<duplexlong\|simplex>,<N>x,paper=<A4\|A3>,monochrome" -silent -exit-when-done <pdf>`. Список и статус: `win32print.EnumPrinters`, `GetPrinter(handle, 2)`, `DeviceCapabilities(..., DC_DUPLEX=7)` с запасным путём через `DM_DUPLEX` в DEVMODE, форматы бумаги — `DeviceCapabilities(..., DC_PAPERS=2)` и поиск `DMPAPER_A3=8` |
 | `FakePrinterBackend` | `core/printing/fake.py` | Складывает «напечатанное» в каталог, ведёт список вызовов, по сценарию возвращает любую `PrintError` |
 
 **Контрактные обязательства (проверяются тестами в `tests/contract/`)**
 1. `print_pdf` возвращает управление только после завершения внешнего процесса; ненулевой код возврата → `PrintError`, а не молчаливый успех.
 2. `copies` и `duplex` передаются устройству ровно один раз — дублирование копий (например, цикл по копиям поверх флага `Nx`) запрещено.
-3. `DUPLEX_LONG` не передаётся принтеру с `supports_duplex = false` — такой вызов есть ошибка вызывающего кода (`INTERNAL`).
+3. `DUPLEX_LONG` не передаётся принтеру с `supports_duplex = false`, `PaperSize.A3` — принтеру с `supports_a3 = false`; такой вызов есть ошибка вызывающего кода (`INTERNAL`).
 4. `list_printers` не бросает исключение при недоступном принтере — недоступность выражается через `get_status`.
 5. Любой отказ отображается в один из кодов `ErrorCode` — «сырые» исключения наружу не выходят.
 

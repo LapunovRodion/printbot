@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 from printbot.core.models import ErrorCode, PrinterConfig, PrinterView
-from printbot.core.printing.base import PrinterBackend
+from printbot.core.printing.base import PrinterBackend, PrinterInfo
 
 log = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ class PrinterRegistry:
         self._backend = backend
         self._cache_ttl = cache_ttl
         self._status_cache: dict[str, _CachedStatus] = {}
-        self._duplex_cache: dict[str, bool] = {}
-        self._duplex_cache_at = 0.0
+        self._caps_cache: dict[str, PrinterInfo] = {}
+        self._caps_cache_at = 0.0
 
     @property
     def configs(self) -> tuple[PrinterConfig, ...]:
@@ -73,20 +73,31 @@ class PrinterRegistry:
         """Значение из конфигурации имеет приоритет над автоопределением."""
         if config.supports_duplex is not None:
             return config.supports_duplex
-        await self._refresh_duplex_cache()
-        return self._duplex_cache.get(config.system_name, False)
+        info = await self._capabilities(config.system_name)
+        return info.supports_duplex if info else False
 
-    async def _refresh_duplex_cache(self) -> None:
+    async def supports_a3(self, config: PrinterConfig) -> bool:
+        """Печатает ли принтер на A3; значение из конфигурации приоритетнее."""
+        if config.supports_a3 is not None:
+            return config.supports_a3
+        info = await self._capabilities(config.system_name)
+        return info.supports_a3 if info else False
+
+    async def _capabilities(self, system_name: str) -> PrinterInfo | None:
+        await self._refresh_caps_cache()
+        return self._caps_cache.get(system_name)
+
+    async def _refresh_caps_cache(self) -> None:
         now = time.monotonic()
-        if self._duplex_cache and now - self._duplex_cache_at < self._cache_ttl:
+        if self._caps_cache and now - self._caps_cache_at < self._cache_ttl:
             return
         try:
             infos = await self._backend.list_printers()
         except Exception:  # pragma: no cover - список не должен ронять диалог
             log.exception("Не удалось получить список принтеров")
             return
-        self._duplex_cache = {info.system_name: info.supports_duplex for info in infos}
-        self._duplex_cache_at = now
+        self._caps_cache = {info.system_name: info for info in infos}
+        self._caps_cache_at = now
 
     async def status_of(self, config: PrinterConfig) -> tuple[bool, ErrorCode | None]:
         now = time.monotonic()
@@ -108,6 +119,7 @@ class PrinterRegistry:
             config=config,
             available=available,
             supports_duplex=await self.supports_duplex(config),
+            supports_a3=await self.supports_a3(config),
             reason=reason,
         )
 
@@ -124,5 +136,5 @@ class PrinterRegistry:
 
     def invalidate(self) -> None:
         self._status_cache.clear()
-        self._duplex_cache.clear()
-        self._duplex_cache_at = 0.0
+        self._caps_cache.clear()
+        self._caps_cache_at = 0.0

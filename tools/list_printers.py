@@ -40,6 +40,7 @@ async def collect() -> list[dict]:
             {
                 "system_name": info.system_name,
                 "supports_duplex": info.supports_duplex,
+                "supports_a3": info.supports_a3,
                 "available": status.available,
                 "reason": status.reason.value if status.reason else None,
             }
@@ -68,12 +69,13 @@ async def main() -> int:
         print(HINTS)
         return 1
 
-    print(f"{'system_name':<40} дуплекс  статус")
-    print("-" * 70)
+    print(f"{'system_name':<40} дуплекс  A3   статус")
+    print("-" * 76)
     for item in printers:
         state = "доступен" if item["available"] else f"недоступен ({item['reason']})"
         duplex = "да" if item["supports_duplex"] else "нет"
-        print(f"{item['system_name']:<40} {duplex:<8} {state}")
+        a3 = "да" if item["supports_a3"] else "нет"
+        print(f"{item['system_name']:<40} {duplex:<8} {a3:<4} {state}")
 
     print("\nСкопируйте нужные system_name в printers.toml.")
     return 0

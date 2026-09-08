@@ -332,8 +332,9 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
         for ($i = 0; $i -lt $printers.Count; $i++) {
             $p = $printers[$i]
             $duplex = if ($p.supports_duplex) { 'дуплекс есть' } else { 'дуплекса нет' }
+            $a3 = if ($p.supports_a3) { 'A4+A3' } else { 'только A4' }
             $state = if ($p.available) { 'доступен' } else { "недоступен ($($p.reason))" }
-            Write-Host ("    {0}) {1}  —  {2}, {3}" -f ($i + 1), $p.system_name, $duplex, $state)
+            Write-Host ("    {0}) {1}  —  {2}, {3}, {4}" -f ($i + 1), $p.system_name, $duplex, $a3, $state)
         }
         Write-Host ''
         $choice = (Read-Host '    Номера принтеров для бота через запятую (Enter — все)').Trim()
@@ -372,6 +373,7 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
                 $lines += "system_name = `"$($p.system_name)`""
                 $lines += "model = `"$($p.system_name)`""
                 $lines += 'enabled = true'
+                if ($p.supports_a3) { $lines += 'supports_a3 = true' }
                 $lines += ''
             }
             Write-Utf8NoBom $PrintersFile ($lines -join "`r`n")
