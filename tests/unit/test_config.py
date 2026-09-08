@@ -35,6 +35,13 @@ def test_example_file_is_valid() -> None:
     assert {p.key for p in printers} == {"buh", "office"}
 
 
+def test_file_saved_by_notepad_with_bom(tmp_path: Path) -> None:
+    """«Блокнот» дописывает BOM — файл всё равно должен читаться."""
+    path = tmp_path / "printers.toml"
+    path.write_bytes(b"\xef\xbb\xbf" + VALID.encode("utf-8"))
+    assert load_printers(path)[0].key == "buh"
+
+
 def test_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="Не найден файл"):
         load_printers(tmp_path / "nope.toml")

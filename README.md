@@ -25,7 +25,30 @@
 | [SumatraPDF](https://www.sumatrapdfreader.org/) (portable) в `tools\SumatraPDF.exe` | печать PDF с дуплексом и копиями |
 | Токен от [@BotFather](https://t.me/BotFather) | доступ к Telegram |
 
-## Установка
+## Быстрая установка (рекомендуется)
+
+Скачайте и распакуйте проект, затем в PowerShell в его папке выполните:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+Скрипт сам проверит Python и LibreOffice, скачает SumatraPDF, создаст окружение,
+спросит токен бота и принтеры, запишет `.env` и `printers.toml` и предложит
+настроить автозапуск. Запускать можно повторно — уже настроенное он не трогает.
+
+| Ключ | Зачем |
+|---|---|
+| `-Reconfigure` | переспросить токен и принтеры заново |
+| `-SkipTests` | не запускать тесты после установки |
+
+Останется только запустить бота и записать код доступа из консоли:
+
+```powershell
+.venv\Scripts\python -m printbot
+```
+
+## Установка вручную
 
 ```powershell
 python -m venv .venv

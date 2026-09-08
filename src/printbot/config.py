@@ -24,8 +24,10 @@ class ConfigError(RuntimeError):
 class Settings(BaseSettings):
     """Переменные из .env / окружения."""
 
+    # utf-8-sig: «Блокнот» в Windows сохраняет файл с BOM, из-за которого первый
+    # ключ читался бы как "﻿BOT_TOKEN" и настройка молча терялась.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
+        env_file=".env", env_file_encoding="utf-8-sig", extra="ignore", case_sensitive=False
     )
 
     bot_token: str = ""
@@ -117,7 +119,7 @@ def load_printers(path: Path) -> tuple[PrinterConfig, ...]:
             "Скопируйте printers.example.toml в printers.toml и укажите свои принтеры."
         )
     try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Файл {path} не разбирается как TOML: {exc}") from exc
 
