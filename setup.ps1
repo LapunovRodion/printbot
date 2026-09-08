@@ -187,9 +187,17 @@ if (-not (Test-Path $VenvPython)) {
 Write-Ok 'Виртуальное окружение готово'
 
 Write-Info 'Устанавливаю зависимости (может занять пару минут) ...'
-$pipQuiet = if ($ShowOutput) { @() } else { @('--quiet') }
-& $VenvPython -m pip install @pipQuiet --upgrade pip
-& $VenvPython -m pip install @pipQuiet -e ".[dev]"
+# Списки аргументов собираем сложением массивов: результат `if` PowerShell
+# разворачивает в строку, а splat одиночной строки разбивает её по символам —
+# именно так pip получал аргумент '-' вместо '--quiet'.
+$pipBase = @('-m', 'pip', 'install')
+if (-not $ShowOutput) { $pipBase += '--quiet' }
+
+$pipUpgrade = $pipBase + @('--upgrade', 'pip')
+& $VenvPython @pipUpgrade
+
+$pipInstall = $pipBase + @('-e', '.[dev]')
+& $VenvPython @pipInstall
 if ($LASTEXITCODE -ne 0) {
     Write-Info 'Повторите с ключом -ShowOutput, чтобы увидеть полный вывод pip.'
     Stop-Setup 'Не удалось установить зависимости (проверьте интернет)'
@@ -386,8 +394,9 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
 
 if (-not $SkipTests) {
     Write-Step 'Проверяю сборку тестами (принтер не нужен)'
-    $pytestArgs = if ($ShowOutput) { @('-v') } else { @('-q') }
-    & $VenvPython -m pytest @pytestArgs
+    $pytestArgs = @('-m', 'pytest')
+    $pytestArgs += if ($ShowOutput) { '-v' } else { '-q' }
+    & $VenvPython @pytestArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Тесты не прошли — подробности в $SetupLog, настройку можно продолжать"
     } else {
