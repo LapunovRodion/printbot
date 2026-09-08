@@ -41,6 +41,16 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 |---|---|
 | `-Reconfigure` | переспросить токен и принтеры заново |
 | `-SkipTests` | не запускать тесты после установки |
+| `-ShowOutput` | показывать полный вывод pip и pytest, а не только итог по шагам |
+
+Ход установки пишется в `logs\setup.log`. Смотреть его прямо во время работы можно
+из второго окна PowerShell:
+
+```powershell
+Get-Content logs\setup.log -Wait -Tail 30
+```
+
+Токен бота в лог не попадает: на время его ввода запись приостанавливается.
 
 Останется только запустить бота и записать код доступа из консоли:
 
@@ -110,6 +120,16 @@ schtasks /Create /TN "PrintBot" /TR "C:\printbot\.venv\Scripts\pythonw.exe -m pr
 Тесты работают на фейковых бэкендах печати и конвертации, поэтому проходят на любой ОС.
 Реального хоста Windows требуют только `core/printing/windows.py` и `core/conversion/libreoffice.py` —
 их проверяют приёмочные сценарии из `specs/001-telegram-print-bot/quickstart.md`.
+
+## Логи
+
+| Файл | Что внутри |
+|---|---|
+| `logs\setup.log` | ход установки, дописывается при каждом запуске `setup.ps1` |
+| `logs\printbot.log` | работа бота: задания, ошибки печати, попытки входа |
+
+Смотреть в реальном времени: `Get-Content logs\printbot.log -Wait -Tail 30`.
+Файл ротируется по 5 МБ, хранятся 5 последних. Токен бота и код доступа в логи не пишутся.
 
 ## Известные особенности
 

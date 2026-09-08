@@ -17,11 +17,20 @@
 
 .PARAMETER Reconfigure
     Переспросить настройки, даже если .env и printers.toml уже есть.
+
+.PARAMETER ShowOutput
+    Показывать полный вывод pip и pytest, а не только итог по шагам.
+
+.NOTES
+    Ход установки пишется в logs\setup.log — его можно смотреть в другом окне:
+        Get-Content logs\setup.log -Wait -Tail 30
+    Ввод токена бота в лог не попадает: на это время запись приостанавливается.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipTests,
-    [switch]$Reconfigure
+    [switch]$Reconfigure,
+    [switch]$ShowOutput
 )
 
 # Внешние программы пишут в stderr в штатном режиме, поэтому 'Stop' здесь не годится:
@@ -40,8 +49,28 @@ $PrintersFile = Join-Path $Root 'printers.toml'
 $SumatraExe = Join-Path $Root 'tools\SumatraPDF.exe'
 $SumatraUrl = 'https://www.sumatrapdfreader.org/dl/rel/3.5.2/SumatraPDF-3.5.2-64.zip'
 
+$SetupLog = Join-Path $Root 'logs\setup.log'
+
 $script:Step = 0
 $script:Warnings = @()
+$script:Transcript = $false
+
+function Start-SetupLog {
+    # Пишем ход установки в файл, чтобы после закрытия окна осталась картина целиком.
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $SetupLog) -Force | Out-Null
+        Start-Transcript -Path $SetupLog -Append -ErrorAction Stop | Out-Null
+        $script:Transcript = $true
+    } catch {
+        $script:Transcript = $false
+    }
+}
+
+function Stop-SetupLog {
+    if (-not $script:Transcript) { return }
+    try { Stop-Transcript | Out-Null } catch {}
+    $script:Transcript = $false
+}
 
 function Write-Step([string]$Text) {
     $script:Step++
@@ -60,7 +89,10 @@ function Write-Warn([string]$Text) {
 function Stop-Setup([string]$Text) {
     Write-Host ''
     Write-Host "ОШИБКА: $Text" -ForegroundColor Red
-    exit 1  # каталог вернёт блок finally в конце скрипта
+    if ($script:Transcript) {
+        Write-Host "Подробности в логе: $SetupLog" -ForegroundColor Yellow
+    }
+    exit 1  # каталог и лог закроет блок finally в конце скрипта
 }
 
 function Confirm-Yes([string]$Question, [bool]$Default = $true) {
@@ -108,11 +140,18 @@ function Get-PythonCommand {
 }
 
 Push-Location $Root
+Start-SetupLog
 try {
 
 Write-Host ''
 Write-Host '=== Установка PrintBot ===' -ForegroundColor White
 Write-Info "Каталог проекта: $Root"
+if ($script:Transcript) {
+    Write-Info "Лог установки: $SetupLog"
+    Write-Info 'Смотреть в другом окне: Get-Content logs\setup.log -Wait -Tail 30'
+} else {
+    Write-Info 'Записать лог в файл не удалось — вывод только на экране'
+}
 
 # --- 1. Python -----------------------------------------------------------------
 
@@ -148,9 +187,13 @@ if (-not (Test-Path $VenvPython)) {
 Write-Ok 'Виртуальное окружение готово'
 
 Write-Info 'Устанавливаю зависимости (может занять пару минут) ...'
-& $VenvPython -m pip install --quiet --upgrade pip
-& $VenvPython -m pip install --quiet -e ".[dev]"
-if ($LASTEXITCODE -ne 0) { Stop-Setup 'Не удалось установить зависимости (проверьте интернет)' }
+$pipQuiet = if ($ShowOutput) { @() } else { @('--quiet') }
+& $VenvPython -m pip install @pipQuiet --upgrade pip
+& $VenvPython -m pip install @pipQuiet -e ".[dev]"
+if ($LASTEXITCODE -ne 0) {
+    Write-Info 'Повторите с ключом -ShowOutput, чтобы увидеть полный вывод pip.'
+    Stop-Setup 'Не удалось установить зависимости (проверьте интернет)'
+}
 Write-Ok 'Зависимости установлены'
 
 # --- 3. LibreOffice ------------------------------------------------------------
@@ -164,14 +207,17 @@ $sofficeCandidates = @(
 $soffice = $sofficeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if (-not $soffice) {
-    Write-Warn 'LibreOffice не найден — без него не будут печататься файлы DOCX (PDF печатать можно).'
+    Write-Warn 'LibreOffice не найден — без него не печатаются файлы DOCX (PDF печатать можно).'
+    Write-Info 'Установка займёт около 350 МБ и несколько минут. Это можно сделать и позже:'
+    Write-Info 'поставить LibreOffice вручную и запустить setup.ps1 повторно.'
     if ((Get-Command winget -ErrorAction SilentlyContinue) -and
-        (Confirm-Yes 'Установить LibreOffice через winget сейчас?')) {
+        (Confirm-Yes 'Скачать и установить LibreOffice через winget прямо сейчас?' $false)) {
+        Write-Info 'Идёт загрузка. Если зависла — Ctrl+C, установка бота от этого не пострадает.'
         & winget install --id TheDocumentFoundation.LibreOffice --accept-source-agreements --accept-package-agreements
         $soffice = $sofficeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     }
     if (-not $soffice) {
-        Write-Info 'Скачайте вручную: https://www.libreoffice.org/download/ и запустите скрипт снова.'
+        Write-Info 'Скачать вручную: https://www.libreoffice.org/download/ — затем запустите setup.ps1 снова.'
     }
 }
 if ($soffice) { Write-Ok $soffice }
@@ -221,6 +267,9 @@ if ((Test-Path $EnvFile) -and -not $Reconfigure) {
     Write-Info 'Свой числовой ID: напишите @userinfobot'
     Write-Host ''
 
+    # Токен не должен осесть в logs\setup.log — на время ввода запись выключаем.
+    Stop-SetupLog
+
     $token = ''
     while ($token -notmatch '^\d{6,12}:[A-Za-z0-9_-]{30,}$') {
         $token = (Read-Host '    Токен бота').Trim()
@@ -245,6 +294,7 @@ if ((Test-Path $EnvFile) -and -not $Reconfigure) {
         $envText = [regex]::Replace($envText, '(?m)^SOFFICE_PATH=.*$', "SOFFICE_PATH=$soffice")
     }
     Write-Utf8NoBom $EnvFile $envText
+    Start-SetupLog
     Write-Ok 'Файл .env записан'
 }
 
@@ -322,9 +372,10 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
 
 if (-not $SkipTests) {
     Write-Step 'Проверяю сборку тестами (принтер не нужен)'
-    & $VenvPython -m pytest -q
+    $pytestArgs = if ($ShowOutput) { @('-v') } else { @('-q') }
+    & $VenvPython -m pytest @pytestArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn 'Тесты не прошли — покажите вывод разработчику, настройку можно продолжать'
+        Write-Warn "Тесты не прошли — подробности в $SetupLog, настройку можно продолжать"
     } else {
         Write-Ok 'Все тесты прошли'
     }
@@ -376,7 +427,12 @@ Write-Info 'При первом запуске в консоли один раз
 Write-Info 'Дальше код меняется командой /setcode в самом боте.'
 Write-Info 'Проверьте двустороннюю печать на каждом принтере (quickstart.md, сценарий 6.2).'
 Write-Host ''
+Write-Host 'Логи:' -ForegroundColor White
+Write-Info "установка — $SetupLog"
+Write-Info 'работа бота — logs\printbot.log (смотреть: Get-Content logs\printbot.log -Wait -Tail 30)'
+Write-Host ''
 
 } finally {
+    Stop-SetupLog
     Pop-Location -ErrorAction SilentlyContinue
 }
