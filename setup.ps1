@@ -24,14 +24,18 @@ param(
     [switch]$Reconfigure
 )
 
-$ErrorActionPreference = 'Stop'
-try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}
+# Внешние программы пишут в stderr в штатном режиме, поэтому 'Stop' здесь не годится:
+# ошибки останавливаем вручную через Stop-Setup.
+$ErrorActionPreference = 'Continue'
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $Root = $PSScriptRoot
 $Venv = Join-Path $Root '.venv'
 $VenvPython = Join-Path $Venv 'Scripts\python.exe'
 $VenvPythonw = Join-Path $Venv 'Scripts\pythonw.exe'
 $EnvFile = Join-Path $Root '.env'
+$EnvExample = Join-Path $Root '.env.example'
 $PrintersFile = Join-Path $Root 'printers.toml'
 $SumatraExe = Join-Path $Root 'tools\SumatraPDF.exe'
 $SumatraUrl = 'https://www.sumatrapdfreader.org/dl/rel/3.5.2/SumatraPDF-3.5.2-64.zip'
@@ -56,7 +60,7 @@ function Write-Warn([string]$Text) {
 function Stop-Setup([string]$Text) {
     Write-Host ''
     Write-Host "ОШИБКА: $Text" -ForegroundColor Red
-    exit 1
+    exit 1  # каталог вернёт блок finally в конце скрипта
 }
 
 function Confirm-Yes([string]$Question, [bool]$Default = $true) {
@@ -71,6 +75,41 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Get-CommandOutput([string]$Exe, [string[]]$Arguments) {
+    # Возвращает вывод внешней программы одной строкой; ошибки запуска гасим.
+    try {
+        $output = & $Exe @Arguments 2>&1 | Out-String
+        return $output.Trim()
+    } catch {
+        return ''
+    }
+}
+
+function Get-PythonCommand {
+    # Ищем подходящий Python: сначала 'python', затем лаунчер 'py -3'.
+    $candidates = @(
+        @{ Exe = 'python'; Prefix = @() },
+        @{ Exe = 'py';     Prefix = @('-3') }
+    )
+    foreach ($candidate in $candidates) {
+        if (-not (Get-Command $candidate.Exe -ErrorAction SilentlyContinue)) { continue }
+
+        $output = Get-CommandOutput $candidate.Exe ($candidate.Prefix + @('--version'))
+        if ($output -notmatch '(\d+)\.(\d+)(?:\.(\d+))?') { continue }
+
+        $patch = if ($Matches[3]) { $Matches[3] } else { '0' }
+        return [pscustomobject]@{
+            Exe     = $candidate.Exe
+            Prefix  = $candidate.Prefix
+            Version = [version]("{0}.{1}.{2}" -f $Matches[1], $Matches[2], $patch)
+        }
+    }
+    return $null
+}
+
+Push-Location $Root
+try {
+
 Write-Host ''
 Write-Host '=== Установка PrintBot ===' -ForegroundColor White
 Write-Info "Каталог проекта: $Root"
@@ -79,21 +118,20 @@ Write-Info "Каталог проекта: $Root"
 
 Write-Step 'Проверяю Python'
 
-$python = Get-Command python -ErrorAction SilentlyContinue
+$python = Get-PythonCommand
 if (-not $python) {
     Stop-Setup @'
-Python не найден. Установите Python 3.11 или новее с https://www.python.org/downloads/
-и обязательно отметьте галочку "Add python.exe to PATH", затем запустите скрипт заново.
-Либо: winget install Python.Python.3.12
+Python не найден (или это заглушка из Microsoft Store).
+Установите Python 3.11 или новее с https://www.python.org/downloads/,
+обязательно отметив галочку "Add python.exe to PATH", и запустите скрипт заново.
+Либо выполните: winget install Python.Python.3.12
 '@
 }
 
-$versionText = (& python --version 2>&1) -replace '[^\d.]', ''
-$version = [version]($versionText -split '\.' | Select-Object -First 3) -join '.'
-if ($version -lt [version]'3.11') {
-    Stop-Setup "Нужен Python 3.11 или новее, найден $version. Обновите Python и повторите."
+if ($python.Version -lt [version]'3.11') {
+    Stop-Setup "Нужен Python 3.11 или новее, найден $($python.Version). Обновите Python и повторите."
 }
-Write-Ok "Python $version"
+Write-Ok "Python $($python.Version)"
 
 # --- 2. Виртуальное окружение и зависимости ------------------------------------
 
@@ -101,8 +139,11 @@ Write-Step 'Готовлю виртуальное окружение'
 
 if (-not (Test-Path $VenvPython)) {
     Write-Info 'Создаю .venv ...'
-    & python -m venv $Venv
-    if ($LASTEXITCODE -ne 0) { Stop-Setup 'Не удалось создать виртуальное окружение' }
+    $venvArgs = $python.Prefix + @('-m', 'venv', $Venv)
+    & $python.Exe @venvArgs
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $VenvPython)) {
+        Stop-Setup 'Не удалось создать виртуальное окружение'
+    }
 }
 Write-Ok 'Виртуальное окружение готово'
 
@@ -143,14 +184,14 @@ if (Test-Path $SumatraExe) {
     Write-Ok $SumatraExe
 } else {
     Write-Info 'SumatraPDF не найден в tools\SumatraPDF.exe'
-    if (Confirm-Yes "Скачать portable-версию с sumatrapdfreader.org?") {
+    if (Confirm-Yes 'Скачать portable-версию с sumatrapdfreader.org?') {
         try {
             $zip = Join-Path $env:TEMP 'sumatrapdf.zip'
             $unpack = Join-Path $env:TEMP 'sumatrapdf'
             Write-Info 'Скачиваю ...'
-            Invoke-WebRequest -Uri $SumatraUrl -OutFile $zip -UseBasicParsing
+            Invoke-WebRequest -Uri $SumatraUrl -OutFile $zip -UseBasicParsing -ErrorAction Stop
             if (Test-Path $unpack) { Remove-Item $unpack -Recurse -Force }
-            Expand-Archive -Path $zip -DestinationPath $unpack -Force
+            Expand-Archive -Path $zip -DestinationPath $unpack -Force -ErrorAction Stop
             $exe = Get-ChildItem $unpack -Filter '*.exe' -Recurse | Select-Object -First 1
             if (-not $exe) { throw 'в архиве нет .exe' }
             New-Item -ItemType Directory -Path (Split-Path $SumatraExe) -Force | Out-Null
@@ -158,8 +199,8 @@ if (Test-Path $SumatraExe) {
             Remove-Item $zip, $unpack -Recurse -Force -ErrorAction SilentlyContinue
             Write-Ok $SumatraExe
         } catch {
-            Write-Warn "Не удалось скачать SumatraPDF: $_"
-            Write-Info 'Скачайте portable-версию вручную с https://www.sumatrapdfreader.org/download-free-pdf-viewer'
+            Write-Warn "Не удалось скачать SumatraPDF: $($_.Exception.Message)"
+            Write-Info 'Скачайте portable-версию вручную: https://www.sumatrapdfreader.org/download-free-pdf-viewer'
             Write-Info "и положите файл как $SumatraExe"
         }
     } else {
@@ -174,6 +215,8 @@ Write-Step 'Настраиваю доступ к Telegram'
 if ((Test-Path $EnvFile) -and -not $Reconfigure) {
     Write-Ok '.env уже есть — оставляю как есть (перенастроить: setup.ps1 -Reconfigure)'
 } else {
+    if (-not (Test-Path $EnvExample)) { Stop-Setup "Не найден файл $EnvExample" }
+
     Write-Info 'Токен бота: в Telegram напишите @BotFather, команда /newbot'
     Write-Info 'Свой числовой ID: напишите @userinfobot'
     Write-Host ''
@@ -193,12 +236,13 @@ if ((Test-Path $EnvFile) -and -not $Reconfigure) {
             Write-Host '    Нужны только числа через запятую.' -ForegroundColor Yellow
         }
     }
+    $admins = $admins -replace '\s', ''
 
-    $envText = Get-Content (Join-Path $Root '.env.example') -Raw -Encoding UTF8
-    $envText = $envText -replace '(?m)^BOT_TOKEN=.*$', "BOT_TOKEN=$token"
-    $envText = $envText -replace '(?m)^ADMIN_IDS=.*$', "ADMIN_IDS=$($admins -replace '\s','')"
+    $envText = Get-Content $EnvExample -Raw -Encoding UTF8
+    $envText = [regex]::Replace($envText, '(?m)^BOT_TOKEN=.*$', "BOT_TOKEN=$token")
+    $envText = [regex]::Replace($envText, '(?m)^ADMIN_IDS=.*$', "ADMIN_IDS=$admins")
     if ($soffice) {
-        $envText = $envText -replace '(?m)^SOFFICE_PATH=.*$', "SOFFICE_PATH=$soffice"
+        $envText = [regex]::Replace($envText, '(?m)^SOFFICE_PATH=.*$', "SOFFICE_PATH=$soffice")
     }
     Write-Utf8NoBom $EnvFile $envText
     Write-Ok 'Файл .env записан'
@@ -212,12 +256,15 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
     Write-Ok 'printers.toml уже есть — оставляю как есть (перенастроить: setup.ps1 -Reconfigure)'
 } else {
     Write-Info 'Опрашиваю систему ...'
-    $raw = & $VenvPython (Join-Path $Root 'tools\list_printers.py') --json 2>$null
+    $raw = Get-CommandOutput $VenvPython @((Join-Path $Root 'tools\list_printers.py'), '--json')
+
     $printers = @()
-    if ($raw) { try { $printers = @($raw | ConvertFrom-Json) } catch { $printers = @() } }
+    if ($raw -and $raw.StartsWith('[')) {
+        try { $printers = @($raw | ConvertFrom-Json) } catch { $printers = @() }
+    }
 
     if ($printers.Count -eq 0) {
-        Write-Warn 'Принтеры не найдены. Подключите их под этой учётной записью и запустите setup.ps1 -Reconfigure'
+        Write-Warn 'Принтеры не найдены. Подключите их под этой учётной записью и запустите: setup.ps1 -Reconfigure'
     } else {
         Write-Host ''
         for ($i = 0; $i -lt $printers.Count; $i++) {
@@ -229,26 +276,34 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
         Write-Host ''
         $choice = (Read-Host '    Номера принтеров для бота через запятую (Enter — все)').Trim()
 
+        $selected = @()
         if ([string]::IsNullOrWhiteSpace($choice)) {
             $selected = $printers
         } else {
-            $indexes = $choice -split ',' | ForEach-Object { [int]($_.Trim()) - 1 }
-            $selected = $indexes | Where-Object { $_ -ge 0 -and $_ -lt $printers.Count } |
-                        ForEach-Object { $printers[$_] }
+            foreach ($part in ($choice -split ',')) {
+                $number = 0
+                if ([int]::TryParse($part.Trim(), [ref]$number) -and
+                    $number -ge 1 -and $number -le $printers.Count) {
+                    $selected += $printers[$number - 1]
+                } else {
+                    Write-Warn "Номер «$($part.Trim())» пропущен — такого пункта нет"
+                }
+            }
         }
 
-        if (-not $selected -or @($selected).Count -eq 0) {
+        if ($selected.Count -eq 0) {
             Write-Warn 'Ничего не выбрано — printers.toml не создан'
         } else {
             $lines = @(
-                '# Создано setup.ps1. system_name менять нельзя — он должен совпадать с именем в Windows.',
+                '# Создано setup.ps1. system_name менять нельзя: он должен совпадать с именем в Windows.',
                 ''
             )
             $n = 0
-            foreach ($p in @($selected)) {
+            foreach ($p in $selected) {
                 $n++
                 $display = (Read-Host "    Как назвать «$($p.system_name)» для сотрудников? (Enter — так же)").Trim()
                 if ([string]::IsNullOrWhiteSpace($display)) { $display = $p.system_name }
+                $display = $display -replace '"', "'"
                 $lines += '[[printer]]'
                 $lines += "key = `"p$n`""
                 $lines += "display_name = `"$display`""
@@ -269,7 +324,7 @@ if (-not $SkipTests) {
     Write-Step 'Проверяю сборку тестами (принтер не нужен)'
     & $VenvPython -m pytest -q
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn 'Тесты не прошли — покажите вывод разработчику, но настройку можно продолжать'
+        Write-Warn 'Тесты не прошли — покажите вывод разработчику, настройку можно продолжать'
     } else {
         Write-Ok 'Все тесты прошли'
     }
@@ -279,22 +334,26 @@ if (-not $SkipTests) {
 
 Write-Step 'Автозапуск при входе в систему'
 
-$taskExists = $null -ne (Get-ScheduledTask -TaskName 'PrintBot' -ErrorAction SilentlyContinue)
-if ($taskExists) {
-    Write-Ok 'Задача PrintBot в планировщике уже есть'
-} elseif (Confirm-Yes 'Настроить автозапуск бота при входе в систему?') {
-    try {
-        $action = New-ScheduledTaskAction -Execute $VenvPythonw -Argument '-m printbot' -WorkingDirectory $Root
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-        Register-ScheduledTask -TaskName 'PrintBot' -Action $action -Trigger $trigger -Settings $settings `
-            -Description 'Telegram-бот печати документов' -Force | Out-Null
-        Write-Ok 'Задача PrintBot создана (запуск при входе, перезапуск при сбое)'
-        Write-Info 'Важно: бот работает в вашей сессии — под LOCAL SYSTEM сетевые принтеры не видны.'
-    } catch {
-        Write-Warn "Не удалось создать задачу: $_"
-        Write-Info 'Создайте вручную командой из README.md (раздел «Автозапуск»).'
+if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
+    Write-Warn 'Планировщик заданий недоступен из PowerShell — настройте автозапуск по README.md'
+} else {
+    $taskExists = $null -ne (Get-ScheduledTask -TaskName 'PrintBot' -ErrorAction SilentlyContinue)
+    if ($taskExists) {
+        Write-Ok 'Задача PrintBot в планировщике уже есть'
+    } elseif (Confirm-Yes 'Настроить автозапуск бота при входе в систему?') {
+        try {
+            $action = New-ScheduledTaskAction -Execute $VenvPythonw -Argument '-m printbot' -WorkingDirectory $Root
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+            Register-ScheduledTask -TaskName 'PrintBot' -Action $action -Trigger $trigger -Settings $settings `
+                -Description 'Telegram-бот печати документов' -Force -ErrorAction Stop | Out-Null
+            Write-Ok 'Задача PrintBot создана (запуск при входе, перезапуск при сбое)'
+            Write-Info 'Важно: бот работает в вашей сессии — под LOCAL SYSTEM сетевые принтеры не видны.'
+        } catch {
+            Write-Warn "Не удалось создать задачу: $($_.Exception.Message)"
+            Write-Info 'Создайте её вручную командой из README.md (раздел «Автозапуск»).'
+        }
     }
 }
 
@@ -311,9 +370,13 @@ if ($script:Warnings.Count -gt 0) {
 
 Write-Host ''
 Write-Host 'Запустить бота:' -ForegroundColor White
-Write-Host "    .venv\Scripts\python -m printbot" -ForegroundColor Green
+Write-Host '    .venv\Scripts\python -m printbot' -ForegroundColor Green
 Write-Host ''
 Write-Info 'При первом запуске в консоли один раз появится КОД ДОСТУПА — запишите его.'
 Write-Info 'Дальше код меняется командой /setcode в самом боте.'
 Write-Info 'Проверьте двустороннюю печать на каждом принтере (quickstart.md, сценарий 6.2).'
 Write-Host ''
+
+} finally {
+    Pop-Location -ErrorAction SilentlyContinue
+}
