@@ -37,6 +37,9 @@ param(
 # ошибки останавливаем вручную через Stop-Setup.
 $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
+# Python по умолчанию пишет в конвейер в кодировке системной локали, а читаем мы UTF-8:
+# без этой строки русские имена принтеров превращаются в «?????».
+$env:PYTHONIOENCODING = 'utf-8'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $Root = $PSScriptRoot
@@ -105,6 +108,14 @@ function Confirm-Yes([string]$Question, [bool]$Default = $true) {
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
     # Без BOM: иначе pydantic-settings и tomllib спотыкаются о первый ключ.
     [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Format-TomlString([string]$Value) {
+    # Имена сетевых принтеров содержат '\\' (\\сервер\\принтер): в TOML-строке обратный
+    # слэш начинает escape-последовательность, поэтому его нужно удвоить, иначе
+    # printers.toml не разбирается как TOML.
+    # .Replace(), а не -replace: в -replace строка замены разбирается как шаблон regex.
+    return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
 }
 
 function Get-CommandOutput([string]$Exe, [string[]]$Arguments) {
@@ -317,17 +328,24 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
     # stdout — это JSON, stderr — причина пустого списка; их нельзя смешивать.
     $tool = Join-Path $Root 'tools\list_printers.py'
     $errFile = Join-Path $env:TEMP 'printbot-printers.err'
-    $raw = (& $VenvPython $tool --json 2>$errFile | Out-String).Trim()
+    # -join '': Out-String переносит длинную строку JSON по ширине окна и ломает разбор.
+    $raw = ((& $VenvPython $tool --json 2>$errFile) -join '').Trim()
     $diag = ''
     if (Test-Path $errFile) {
-        $diag = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+        $diag = (Get-Content $errFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
         if ($diag) { $diag = $diag.Trim() }
         Remove-Item $errFile -Force -ErrorAction SilentlyContinue
     }
 
     $printers = @()
     if ($raw -and $raw.StartsWith('[')) {
-        try { $printers = @($raw | ConvertFrom-Json) } catch { $printers = @() }
+        # ConvertFrom-Json отдаёт JSON-массив одним объектом, и @() его не разворачивает:
+        # без явного foreach получался один «принтер» со списком всех имён внутри.
+        try {
+            foreach ($item in (ConvertFrom-Json -InputObject $raw)) {
+                if ($null -ne $item) { $printers += $item }
+            }
+        } catch { $printers = @() }
     }
 
     if ($printers.Count -eq 0) {
@@ -374,12 +392,11 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
                 $n++
                 $display = (Read-Host "    Как назвать «$($p.system_name)» для сотрудников? (Enter — так же)").Trim()
                 if ([string]::IsNullOrWhiteSpace($display)) { $display = $p.system_name }
-                $display = $display -replace '"', "'"
                 $lines += '[[printer]]'
                 $lines += "key = `"p$n`""
-                $lines += "display_name = `"$display`""
-                $lines += "system_name = `"$($p.system_name)`""
-                $lines += "model = `"$($p.system_name)`""
+                $lines += 'display_name = ' + (Format-TomlString $display)
+                $lines += 'system_name = ' + (Format-TomlString $p.system_name)
+                $lines += 'model = ' + (Format-TomlString $p.system_name)
                 $lines += 'enabled = true'
                 if ($p.supports_a3) { $lines += 'supports_a3 = true' }
                 $lines += ''

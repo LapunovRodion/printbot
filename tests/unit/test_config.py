@@ -30,6 +30,26 @@ def test_loads_valid_file(tmp_path: Path) -> None:
     assert printers[0].supports_duplex is None
 
 
+def test_supports_a3_override_is_read(tmp_path: Path) -> None:
+    """setup.ps1 пишет supports_a3 для принтеров с A3 — значение не должно теряться."""
+    content = VALID + "supports_a3 = true\n"
+    printers = load_printers(write(tmp_path, content))
+    assert printers[0].supports_a3 is True
+    assert load_printers(write(tmp_path, VALID))[0].supports_a3 is None
+
+
+def test_network_printer_name_with_backslashes(tmp_path: Path) -> None:
+    """Сетевое имя вида \\\\сервер\\принтер должно читаться как есть."""
+    content = """
+[[printer]]
+key = "net"
+display_name = "Сетевой"
+system_name = '\\\\10.153.1.46\\Pantum BM5100ADN Series PCL6'
+"""
+    printers = load_printers(write(tmp_path, content))
+    assert printers[0].system_name == r"\\10.153.1.46\Pantum BM5100ADN Series PCL6"
+
+
 def test_example_file_is_valid() -> None:
     printers = load_printers(Path("printers.example.toml"))
     assert {p.key for p in printers} == {"buh", "office"}

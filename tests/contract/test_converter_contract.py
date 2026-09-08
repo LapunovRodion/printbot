@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,11 @@ async def test_timeout_is_reported_as_timeout_code(tmp_path: Path) -> None:
     """Долгая конвертация прерывается и отображается в ErrorCode.TIMEOUT."""
     from printbot.core.conversion.libreoffice import LibreOfficeConverter
 
-    converter = LibreOfficeConverter(soffice_path=Path("/bin/sh"), extra_args=["-c", "sleep 30"])
+    # Вместо soffice — заведомо долгий процесс. Берём текущий Python, а не /bin/sh:
+    # на Windows /bin/sh нет, и вместо TIMEOUT получался CONVERSION_FAILED.
+    converter = LibreOfficeConverter(
+        soffice_path=Path(sys.executable), extra_args=["-c", "import time; time.sleep(30)"]
+    )
     source = tmp_path / "doc.docx"
     source.write_bytes(make_docx_bytes())
 

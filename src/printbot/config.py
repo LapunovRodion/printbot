@@ -159,6 +159,10 @@ def load_printers(path: Path) -> tuple[PrinterConfig, ...]:
         if supports_duplex is not None and not isinstance(supports_duplex, bool):
             raise ConfigError(f"supports_duplex у принтера {key!r} должен быть true/false")
 
+        supports_a3 = entry.get("supports_a3")
+        if supports_a3 is not None and not isinstance(supports_a3, bool):
+            raise ConfigError(f"supports_a3 у принтера {key!r} должен быть true/false")
+
         printers.append(
             PrinterConfig(
                 key=key,
@@ -167,6 +171,7 @@ def load_printers(path: Path) -> tuple[PrinterConfig, ...]:
                 model=str(entry.get("model", "")),
                 enabled=bool(entry.get("enabled", True)),
                 supports_duplex=supports_duplex,
+                supports_a3=supports_a3,
             )
         )
 
