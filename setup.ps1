@@ -306,7 +306,16 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
     Write-Ok 'printers.toml уже есть — оставляю как есть (перенастроить: setup.ps1 -Reconfigure)'
 } else {
     Write-Info 'Опрашиваю систему ...'
-    $raw = Get-CommandOutput $VenvPython @((Join-Path $Root 'tools\list_printers.py'), '--json')
+    # stdout — это JSON, stderr — причина пустого списка; их нельзя смешивать.
+    $tool = Join-Path $Root 'tools\list_printers.py'
+    $errFile = Join-Path $env:TEMP 'printbot-printers.err'
+    $raw = (& $VenvPython $tool --json 2>$errFile | Out-String).Trim()
+    $diag = ''
+    if (Test-Path $errFile) {
+        $diag = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+        if ($diag) { $diag = $diag.Trim() }
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
 
     $printers = @()
     if ($raw -and $raw.StartsWith('[')) {
@@ -314,7 +323,10 @@ if ((Test-Path $PrintersFile) -and -not $Reconfigure) {
     }
 
     if ($printers.Count -eq 0) {
-        Write-Warn 'Принтеры не найдены. Подключите их под этой учётной записью и запустите: setup.ps1 -Reconfigure'
+        Write-Warn 'Принтеры не найдены'
+        if ($diag) { Write-Info "Причина: $diag" }
+        Write-Info 'Подробная диагностика:  .venv\Scripts\python tools\list_printers.py'
+        Write-Info 'Когда принтеры появятся, запустите: setup.ps1 -Reconfigure'
     } else {
         Write-Host ''
         for ($i = 0; $i -lt $printers.Count; $i++) {

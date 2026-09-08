@@ -38,15 +38,36 @@ _STATUS_MAP: tuple[tuple[str, ErrorCode], ...] = (
 )
 
 
+#: Причина, по которой не удалось получить список принтеров. Нужна для диагностики:
+#: без неё пустой список выглядит как «принтеров нет», хотя дело в окружении.
+_LAST_ERROR: str | None = None
+
+
+def last_error() -> str | None:
+    """Почему список принтеров пуст, если он пуст не по-настоящему."""
+    return _LAST_ERROR
+
+
 def _win32print():
     """Импорт pywin32 только на Windows — на других платформах возвращает None."""
+    global _LAST_ERROR
+
     if sys.platform != "win32":
+        _LAST_ERROR = (
+            f"печать доступна только на Windows, текущая система — {sys.platform}"
+        )
         return None
     try:
         import win32print  # type: ignore[import-not-found]
-    except ImportError:  # pragma: no cover - только на хосте без pywin32
-        log.error("pywin32 не установлен — список принтеров недоступен")
+    except ImportError as exc:  # pragma: no cover - только на хосте без pywin32
+        _LAST_ERROR = (
+            f"не удалось загрузить pywin32 ({exc}). "
+            "Обычно помогает: .venv\\Scripts\\python -m pywin32_postinstall -install"
+        )
+        log.error(_LAST_ERROR)
         return None
+
+    _LAST_ERROR = None
     return win32print
 
 
@@ -124,14 +145,23 @@ class WindowsPrinterBackend:
             return []
         flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
         result: list[PrinterInfo] = []
+        global _LAST_ERROR
         try:
             for printer in win32print.EnumPrinters(flags, None, 2):
                 name = printer["pPrinterName"]
                 result.append(
                     PrinterInfo(system_name=name, supports_duplex=self._supports_duplex_sync(name))
                 )
-        except Exception:  # pragma: no cover - список принтеров не должен ронять бота
+        except Exception as exc:  # pragma: no cover - список принтеров не должен ронять бота
+            _LAST_ERROR = f"ошибка при опросе очереди печати Windows: {exc}"
             log.exception("Не удалось перечислить принтеры")
+            return result
+
+        if not result:
+            _LAST_ERROR = (
+                "Windows не вернула ни одного принтера: в системе их нет "
+                "либо процесс запущен под другой учётной записью"
+            )
         return result
 
     async def supports_duplex(self, system_name: str) -> bool:
