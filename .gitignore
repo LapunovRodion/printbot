@@ -1,0 +1,27 @@
+# secrets and local config
+.env
+printers.toml
+
+# runtime data
+data/
+logs/
+tools/SumatraPDF.exe
+tools/*.exe
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

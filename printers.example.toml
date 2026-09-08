@@ -1,0 +1,17 @@
+# Список принтеров. system_name должен точно совпадать с именем принтера в Windows.
+# Узнать имена: .venv\Scripts\python tools\list_printers.py
+
+[[printer]]
+key = "buh"
+display_name = "Бухгалтерия"
+system_name = "Pantum P5100"
+model = "Pantum 5100"
+enabled = true
+# supports_duplex = true   # необязательно: переопределяет автоопределение
+
+[[printer]]
+key = "office"
+display_name = "Кабинет"
+system_name = "GM1033ADN"
+model = "GM1033ADN"
+enabled = true
