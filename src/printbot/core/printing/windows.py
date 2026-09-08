@@ -23,19 +23,54 @@ _DUPLEX_FLAG = {
     DuplexMode.DUPLEX_LONG: "duplexlong",
 }
 
-#: Флаги win32print → коды ошибок (contracts/printer-backend.md).
-_STATUS_MAP: tuple[tuple[str, ErrorCode], ...] = (
-    ("PRINTER_STATUS_PAPER_JAM", ErrorCode.PAPER_JAM),
-    ("PRINTER_STATUS_PAPER_OUT", ErrorCode.PAPER_OUT),
-    ("PRINTER_STATUS_PAPER_PROBLEM", ErrorCode.PAPER_OUT),
-    ("PRINTER_STATUS_NO_TONER", ErrorCode.NO_TONER),
-    ("PRINTER_STATUS_TONER_LOW", ErrorCode.NO_TONER),
-    ("PRINTER_STATUS_OFFLINE", ErrorCode.PRINTER_OFFLINE),
-    ("PRINTER_STATUS_NOT_AVAILABLE", ErrorCode.PRINTER_OFFLINE),
-    ("PRINTER_STATUS_ERROR", ErrorCode.PRINTER_ERROR),
-    ("PRINTER_STATUS_PAUSED", ErrorCode.PRINTER_ERROR),
-    ("PRINTER_STATUS_DOOR_OPEN", ErrorCode.PRINTER_ERROR),
+#: Числовые значения из winspool.h. Берём их явно, а не через getattr у модуля:
+#: имена констант у pywin32 отличаются между версиями, а биты неизменны.
+PRINTER_STATUS_PAUSED = 0x00000001
+PRINTER_STATUS_ERROR = 0x00000002
+PRINTER_STATUS_PAPER_JAM = 0x00000008
+PRINTER_STATUS_PAPER_OUT = 0x00000010
+PRINTER_STATUS_PAPER_PROBLEM = 0x00000040
+PRINTER_STATUS_OFFLINE = 0x00000080
+PRINTER_STATUS_OUTPUT_BIN_FULL = 0x00000800
+PRINTER_STATUS_NOT_AVAILABLE = 0x00001000
+PRINTER_STATUS_NO_TONER = 0x00040000
+PRINTER_STATUS_USER_INTERVENTION = 0x00100000
+PRINTER_STATUS_OUT_OF_MEMORY = 0x00200000
+PRINTER_STATUS_DOOR_OPEN = 0x00400000
+PRINTER_ATTRIBUTE_WORK_OFFLINE = 0x00000400
+
+#: Индексы DeviceCapabilities и поля DEVMODE (wingdi.h).
+DC_DUPLEX = 7
+DM_DUPLEX = 0x1000
+
+#: Биты состояния, при которых печатать нельзя (contracts/printer-backend.md).
+#: Порядок важен: первая подошедшая причина показывается пользователю.
+#: TONER_LOW, WARMING_UP, POWER_SAVE, BUSY и прочие рабочие состояния сюда НЕ входят —
+#: принтер с низким тонером или в спящем режиме печатает нормально.
+_STATUS_MAP: tuple[tuple[int, ErrorCode], ...] = (
+    (PRINTER_STATUS_PAPER_JAM, ErrorCode.PAPER_JAM),
+    (PRINTER_STATUS_PAPER_OUT, ErrorCode.PAPER_OUT),
+    (PRINTER_STATUS_PAPER_PROBLEM, ErrorCode.PAPER_OUT),
+    (PRINTER_STATUS_NO_TONER, ErrorCode.NO_TONER),
+    (PRINTER_STATUS_OFFLINE, ErrorCode.PRINTER_OFFLINE),
+    (PRINTER_STATUS_NOT_AVAILABLE, ErrorCode.PRINTER_OFFLINE),
+    (PRINTER_STATUS_DOOR_OPEN, ErrorCode.PRINTER_ERROR),
+    (PRINTER_STATUS_OUTPUT_BIN_FULL, ErrorCode.PRINTER_ERROR),
+    (PRINTER_STATUS_USER_INTERVENTION, ErrorCode.PRINTER_ERROR),
+    (PRINTER_STATUS_OUT_OF_MEMORY, ErrorCode.PRINTER_ERROR),
+    (PRINTER_STATUS_ERROR, ErrorCode.PRINTER_ERROR),
+    (PRINTER_STATUS_PAUSED, ErrorCode.PRINTER_ERROR),
 )
+
+
+def classify_status(status_bits: int, attributes: int) -> ErrorCode | None:
+    """Причина недоступности принтера либо None, если печатать можно."""
+    if attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE:
+        return ErrorCode.PRINTER_OFFLINE
+    for flag, code in _STATUS_MAP:
+        if status_bits & flag:
+            return code
+    return None
 
 
 #: Причина, по которой не удалось получить список принтеров. Нужна для диагностики:
@@ -149,8 +184,12 @@ class WindowsPrinterBackend:
         try:
             for printer in win32print.EnumPrinters(flags, None, 2):
                 name = printer["pPrinterName"]
+                port = printer.get("pPortName", "") or ""
                 result.append(
-                    PrinterInfo(system_name=name, supports_duplex=self._supports_duplex_sync(name))
+                    PrinterInfo(
+                        system_name=name,
+                        supports_duplex=self._supports_duplex_sync(name, port),
+                    )
                 )
         except Exception as exc:  # pragma: no cover - список принтеров не должен ронять бота
             _LAST_ERROR = f"ошибка при опросе очереди печати Windows: {exc}"
@@ -164,18 +203,52 @@ class WindowsPrinterBackend:
             )
         return result
 
-    async def supports_duplex(self, system_name: str) -> bool:
-        return await asyncio.to_thread(self._supports_duplex_sync, system_name)
+    async def supports_duplex(self, system_name: str, port: str = "") -> bool:
+        return await asyncio.to_thread(self._supports_duplex_sync, system_name, port)
 
-    def _supports_duplex_sync(self, system_name: str) -> bool:
+    def _supports_duplex_sync(self, system_name: str, port: str = "") -> bool:
+        """Спрашиваем драйвер, умеет ли принтер печатать с двух сторон.
+
+        Часть драйверов (в частности Pantum PCL6) не отвечает на DeviceCapabilities,
+        поэтому есть запасной путь через поля DEVMODE.
+        """
         win32print = _win32print()
         if win32print is None:
             return False
+
         try:
-            return bool(win32print.DeviceCapabilities(system_name, "", 26))  # DC_DUPLEX = 26
-        except Exception:  # pragma: no cover - драйвер может не отвечать
-            log.warning("Не удалось определить дуплекс у %s", system_name)
+            value = win32print.DeviceCapabilities(system_name, port, DC_DUPLEX)
+            if value is not None and value > 0:
+                return True
+            if value == 0:
+                return False  # драйвер ответил явно: дуплекса нет
+        except Exception as exc:  # pragma: no cover - драйвер может не отвечать
+            log.debug("DeviceCapabilities не ответил для %s: %s", system_name, exc)
+
+        return self._duplex_from_devmode(system_name)
+
+    def _duplex_from_devmode(self, system_name: str) -> bool:
+        """Запасной способ: наличие бита DM_DUPLEX в полях DEVMODE принтера."""
+        win32print = _win32print()
+        if win32print is None:
             return False
+        handle = None
+        try:
+            handle = win32print.OpenPrinter(system_name)
+            devmode = win32print.GetPrinter(handle, 2).get("pDevMode")
+            if devmode is None:
+                log.warning(
+                    "Не удалось определить дуплекс у %s: драйвер не отдал DEVMODE", system_name
+                )
+                return False
+            return bool(int(devmode.Fields) & DM_DUPLEX)
+        except Exception as exc:  # pragma: no cover - только на хосте
+            log.warning("Не удалось определить дуплекс у %s: %s", system_name, exc)
+            return False
+        finally:
+            if handle is not None:
+                with suppress(Exception):
+                    win32print.ClosePrinter(handle)
 
     async def get_status(self, system_name: str) -> PrinterStatus:
         return await asyncio.to_thread(self._get_status_sync, system_name)
@@ -199,14 +272,15 @@ class WindowsPrinterBackend:
         status_bits = int(info.get("Status", 0))
         attributes = int(info.get("Attributes", 0))
         queued = int(info.get("cJobs", 0))
+        log.debug(
+            "Статус %s: Status=0x%08X Attributes=0x%08X cJobs=%s",
+            system_name,
+            status_bits,
+            attributes,
+            queued,
+        )
 
-        work_offline = getattr(win32print, "PRINTER_ATTRIBUTE_WORK_OFFLINE", 0x00000400)
-        if attributes & work_offline:
-            return PrinterStatus(False, ErrorCode.PRINTER_OFFLINE, queued)
-
-        for flag_name, code in _STATUS_MAP:
-            flag = getattr(win32print, flag_name, 0)
-            if flag and status_bits & flag:
-                return PrinterStatus(False, code, queued)
-
+        reason = classify_status(status_bits, attributes)
+        if reason is not None:
+            return PrinterStatus(False, reason, queued)
         return PrinterStatus(available=True, reason=None, queued_jobs=queued)
